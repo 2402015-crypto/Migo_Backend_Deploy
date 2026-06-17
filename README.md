@@ -1,53 +1,117 @@
-# MIGO Backend
-(No Actualizado. Ver /config/modulos_api.sql para ver la info más reciente)
 
-Backend académico desarrollado con **Oracle Autonomous Database** y **Oracle REST Data Services (ORDS)**.  
-Este proyecto implementa un **API REST** para la gestión de usuarios, colonias, publicaciones y fotos, incluyendo operaciones CRUD y un servicio de login funcional.
+---
+
+# MIGO Backend
+
+Este proyecto corresponde al **backend del sistema académico y comunitario MIGO**, desarrollado con **Node.js + Express** y conectado a una **base de datos MySQL/Oracle**.  
+Provee una API REST para gestionar usuarios, publicaciones, colonias, especies y tipos de reporte.
+
+---
 
 ## Tecnologías utilizadas
-- Oracle Autonomous Database
-- Oracle REST Data Services (ORDS)
-- SQL (definición de tablas y consultas)
-- JSON (formato de intercambio de datos)
+- Node.js (v18+)
+- Express.js
+- MySQL2 / Oracle Autonomous Database
+- CORS
+- Multer (para subida de imágenes)
+- REST API con arquitectura modular
+
+---
+
+## Estructura del proyecto
+
+```
+migo-backend/
+│
+├── server.js              # Punto de entrada del servidor y ENDPOINTS
+├── sql/                   # Script SQL
+├── uploads/               # Carpeta donde se guardan imágenes
+└── README.md              # Documentación del proyecto
+```
+
+---
+
+## Instalación y configuración
+
+1. Clonar el repositorio:
+   ```bash
+   https://github.com/2402015-crypto/Migo_Backend.git
+   cd migo-backend
+   ```
+
+2. Instalar dependencias:
+   ```bash
+   npm install
+   ```
+
+3. Configurar variables de entorno en un archivo `.env`:
+   ```
+   DB_HOST=localhost
+   DB_USER=usuario
+   DB_PASSWORD=contraseña
+   DB_NAME=migo_db
+   PORT=4000
+   ```
+
+4. Iniciar el servidor:
+   ```bash
+   npm start
+   ```
+   El backend estará disponible en:  
+   `http://localhost:4000/api`
+
+---
 
 ## Endpoints principales
 
 ### Usuarios
-- `GET /usuarios/` → Lista todos los usuarios
-- `GET /usuarios/:id` → Obtiene un usuario específico
-- `POST /usuarios/` → Crea un nuevo usuario
-- `PUT /usuarios/:id` → Actualiza un usuario existente
-- `DELETE /usuarios/:id` → Elimina un usuario
-
-### Colonias
-- `GET /colonias/` → Lista todas las colonias
-- `GET /colonias/:id` → Obtiene una colonia específica
-- `POST /colonias/` → Crea una nueva colonia
+- `POST /api/usuarios/register` → Registrar usuario
+- `POST /api/usuarios/login` → Iniciar sesión
 
 ### Publicaciones
-- `GET /publicaciones/` → Lista todas las publicaciones
-- `GET /publicaciones/:id` → Obtiene una publicación específica
-- `POST /publicaciones/` → Crea una nueva publicación
-- `PUT /publicaciones/:id` → Actualiza una publicación existente
-- `DELETE /publicaciones/:id` → Elimina una publicación
+- `GET /api/publicaciones` → Listar publicaciones
+- `POST /api/publicaciones` → Crear publicación
+- `POST /api/fotos/:id` → Subir imagen asociada a publicación
 
-### Fotos de Publicaciones
-- `GET /publicaciones/:id/fotos` → Lista todas las fotos de una publicación
-- `POST /publicaciones/:id/fotos` → Sube una nueva foto asociada a una publicación
-- `GET /fotos/:id` → Obtiene detalle de una foto específica
-- `DELETE /fotos/:id` → Elimina una foto
+### Colonias
+- `GET /api/colonias` → Listar colonias
 
-### Catálogos
-- `GET /especies/` → Lista todas las especies
-- `POST /especies/` → Crea una nueva especie
-- `GET /tipos_publi/` → Lista todos los tipos de publicación
-- `POST /tipos_publi/` → Crea un nuevo tipo de publicación
-- `GET /estados_publi/` → Lista todos los estados de publicación
-- `POST /estados_publi/` → Crea un nuevo estado de publicación
+### Especies
+- `GET /api/especies` → Listar especies
 
-### Login
-- `POST /login/`  
+### Tipos de publicación
+- `GET /api/tipos_publi` → Listar tipos de reporte
 
-## Documentación
-- Scripts SQL para creación de tablas y datos de prueba en `/sql`
-- Colección de Postman para pruebas en `/docs`
+---
+
+## Ejemplo de request
+
+**Crear publicación:**
+```json
+POST /api/publicaciones
+{
+  "id_usuario": 1,
+  "id_colonia": 2,
+  "id_especie": 1,
+  "id_tipo": 1,
+  "id_estado": 1,
+  "nombre_pet": "Firulais",
+  "descripcion": "Se busca perro perdido en Las Palmas"
+}
+```
+
+**Respuesta:**
+```json
+{
+  "id": 15,
+  "message": "Publicación creada con éxito"
+}
+```
+
+---
+
+## Autor
+Proyecto desarrollado por **Bryan Martínez Jiménez**  
+Backend académico y comunitario para MIGO.
+
+---
