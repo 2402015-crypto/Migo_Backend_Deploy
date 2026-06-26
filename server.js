@@ -211,6 +211,25 @@ app.post('/api/resenas', (req, res) => {
     });
 });
 
+// PUT editar reseña
+app.put('/api/resenas/:id', (req, res) => {
+    const { comentario, calificacion } = req.body;
+    const sql = "UPDATE resenas SET comentario = ?, calificacion = ? WHERE id_resena = ?";
+    db.query(sql, [comentario, calificacion, req.params.id], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (result.affectedRows === 0) return res.status(404).json({ error: "Reseña no encontrada" });
+        res.json({ message: 'Reseña actualizada' });
+    });
+});
+
+// DELETE eliminar reseña
+app.delete('/api/resenas/:id', (req, res) => {
+    db.query("DELETE FROM resenas WHERE id_resena = ?", [req.params.id], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ message: 'Reseña eliminada' });
+    });
+});
+
 // COMENTARIOS Y RESEÑAS (Simplificado para brevedad)
 app.get('/api/comentarios/:id_publi', (req, res) => {
     db.query("SELECT c.*, CONCAT(u.nombre, ' ', u.apellido) AS nombre_completo FROM comentarios c JOIN usuarios u ON c.id_usuario = u.id_usuario WHERE c.id_publi = ? ORDER BY c.fecha ASC", [req.params.id_publi], (err, results) => {
