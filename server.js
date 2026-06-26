@@ -1,13 +1,19 @@
-// 1. Configuración inicial
 require('dotenv').config();
 
 const express = require('express');
 const mysql = require('mysql2');
 const cors = require('cors');
 const multer = require('multer');
+const cloudinary = require('cloudinary').v2;
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
+
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 app.use(cors({
     origin: 'https://comforting-capybara-8c1237.netlify.app',
@@ -15,9 +21,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type']
 }));
 app.use(express.json());
-app.use('/uploads', express.static('uploads'));
 
-// 2. Conexión a la BD
 const db = mysql.createConnection({
     host: process.env.MYSQLHOST,
     user: process.env.MYSQLUSER,
@@ -30,32 +34,13 @@ console.log("Intentando conectar a:", process.env.MYSQLHOST);
 console.log("Usuario:", process.env.MYSQLUSER);
 
 db.connect((err) => {
-    if (err) {
-        console.error('Error al conectar a la base de datos:', err.message);
-        return;
-    }
+    if (err) { console.error('Error BD:', err.message); return; }
     console.log('Conectado exitosamente a la base de datos 🚀');
 });
 
 db.on('error', (err) => {
     console.error('Error en la base de datos:', err);
-    if(err.code === 'PROTOCOL_CONNECTION_LOST') console.log('Reconectando...');
-});
-
-// 3. ENDPOINTS
-
-// USUARIOS
-app.post('/api/usuarios', (req, res) => {
-    const { nombre, apellido, correo, contrasena, telefono, direccion, id_colonia, rol } = req.body;
-    db.query("SELECT id_usuario FROM usuarios WHERE correo = ?", [correo], (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (rows.length > 0) return res.status(400).json({ error: "El correo ya está registrado" });
-        const sql = "INSERT INTO usuarios (nombre, apellido, correo, contrasena, telefono, direccion, id_colonia, rol) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
-        db.query(sql, [nombre, apellido, correo, contrasena, telefono, direccion, id_colonia, rol], (err, result) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ message: 'Usuario registrado', id: result.insertId });
-        });
-    });
+    if (err.code === 'PROTOCOL_CONNECTION_LOST') console.log('Reconectando...');
 });
 
 // COLONIAS
@@ -66,13 +51,27 @@ app.get('/api/colonias', (req, res) => {
     });
 });
 
-app.get('/api/usuarios/:id', (req, res) => {
-    const sql = "SELECT u.*, c.nombre AS colonia FROM usuarios u LEFT JOIN colonias c ON u.id_colonia = c.id_colonia WHERE u.id_usuario = ?";
-    db.query(sql, [req.params.id], (err, results) => {
+// USUARIOS
+app.post('/api/usuarios', (req, res) => {
+    const { nombre, apellido, correo, contrasena, telefono, direccion, id_colonia, rol } = req.body;
+    db.query("SELECT id_usuario FROM usuarios WHERE correo = ?", [correo], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
-        if (results.length === 0) return res.status(404).json({ message: "No encontrado" });
-        res.json(results[0]);
+        if (rows.length > 0) return res.status(400).json({ error: "El correo ya está registrado" });
+        db.query("INSERT INTO usuarios (nombre, apellido, correo, contrasena, telefono, direccion, id_colonia, rol) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [nombre, apellido, correo, contrasena, telefono, direccion, id_colonia, rol], (err, result) => {
+                if (err) return res.status(500).json({ error: err.message });
+                res.json({ message: 'Usuario registrado', id: result.insertId });
+            });
     });
+});
+
+app.get('/api/usuarios/:id', (req, res) => {
+    db.query("SELECT u.*, c.nombre AS colonia FROM usuarios u LEFT JOIN colonias c ON u.id_colonia = c.id_colonia WHERE u.id_usuario = ?",
+        [req.params.id], (err, results) => {
+            if (err) return res.status(500).json({ error: err.message });
+            if (results.length === 0) return res.status(404).json({ message: "No encontrado" });
+            res.json(results[0]);
+        });
 });
 
 app.post('/api/login', (req, res) => {
@@ -86,7 +85,8 @@ app.post('/api/login', (req, res) => {
 
 // PUBLICACIONES
 app.get('/api/publicaciones', (req, res) => {
-    const sql = `SELECT p.*, u.nombre AS usuario, c.nombre AS nombre_colonia, e.nombre AS especie, t.nombre AS tipo, est.nombre AS estado, f.ruta_imagen
+    const sql = `SELECT p.*, u.nombre AS usuario, c.nombre AS nombre_colonia, e.nombre AS especie, 
+                 t.nombre AS tipo, est.nombre AS estado, f.ruta_imagen
                  FROM publicaciones p
                  JOIN usuarios u ON p.id_usuario = u.id_usuario
                  JOIN colonias c ON p.id_colonia = c.id_colonia
@@ -110,165 +110,160 @@ app.post('/api/publicaciones', (req, res) => {
         });
 });
 
-// VETERINARIOS
-app.post('/api/login-vet', (req, res) => {
-    const { correo, contrasena } = req.body;
-    db.query("SELECT u.id_usuario, u.nombre, u.rol, v.id_vet FROM usuarios u LEFT JOIN veterinarias v ON u.id_usuario = v.id_usuario WHERE u.correo = ? AND u.contrasena = ?", [correo, contrasena], (err, results) => {
-        if (err || results.length === 0 || results[0].rol !== 'veterinario') return res.status(401).json({ message: 'Acceso denegado' });
-        res.json({ success: true, usuario: results[0] });
-    });
+// FOTOS PUBLICACIONES con Cloudinary
+app.post('/api/fotos', upload.single('imagen'), async (req, res) => {
+    try {
+        const result = await cloudinary.uploader.upload(req.file.path, { folder: 'migo/publicaciones' });
+        const { id_publi } = req.body;
+        db.query("INSERT INTO fotos_publi (id_publi, ruta_imagen) VALUES (?, ?)",
+            [id_publi, result.secure_url], (err) => {
+                if (err) return res.status(500).json({ error: err.message });
+                res.json({ url: result.secure_url });
+            });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al subir foto' });
+    }
 });
 
-// GET todas las veterinarias
+// VETERINARIAS
 app.get('/api/veterinarias', (req, res) => {
-    const sql = `SELECT v.*, c.nombre AS nombre_colonia 
-                 FROM veterinarias v 
-                 LEFT JOIN colonias c ON v.id_colonia = c.id_colonia 
-                 ORDER BY v.nombre_establecimiento ASC`;
-    db.query(sql, (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(results);
-    });
+    db.query(`SELECT v.*, c.nombre AS nombre_colonia FROM veterinarias v LEFT JOIN colonias c ON v.id_colonia = c.id_colonia ORDER BY v.nombre_establecimiento ASC`,
+        (err, results) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json(results);
+        });
 });
 
-// GET veterinaria por id_vet
 app.get('/api/veterinaria/:id_vet', (req, res) => {
-    const sql = `SELECT v.*, c.nombre AS nombre_colonia 
-                 FROM veterinarias v 
-                 LEFT JOIN colonias c ON v.id_colonia = c.id_colonia 
-                 WHERE v.id_vet = ?`;
-    db.query(sql, [req.params.id_vet], (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (results.length === 0) return res.status(404).json({ message: "Veterinaria no encontrada" });
-        res.json(results[0]);
-    });
+    db.query(`SELECT v.*, c.nombre AS nombre_colonia FROM veterinarias v LEFT JOIN colonias c ON v.id_colonia = c.id_colonia WHERE v.id_vet = ?`,
+        [req.params.id_vet], (err, results) => {
+            if (err) return res.status(500).json({ error: err.message });
+            if (results.length === 0) return res.status(404).json({ message: "No encontrada" });
+            res.json(results[0]);
+        });
 });
 
-// PUT actualizar veterinaria
-app.put('/api/veterinarias/:id_vet', (req, res) => {
-    const { nombre_establecimiento, descripcion, id_colonia, correo_negocio, telefono_local, sitio_web } = req.body;
-    const sql = `UPDATE veterinarias 
-                 SET nombre_establecimiento = ?, descripcion = ?, id_colonia = ?, 
-                     correo_negocio = ?, telefono_local = ?, sitio_web = ?
-                 WHERE id_vet = ?`;
-    db.query(sql, [nombre_establecimiento, descripcion, id_colonia, correo_negocio, telefono_local, sitio_web, req.params.id_vet], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: 'Veterinaria actualizada correctamente' });
-    });
-});
-
-// REGISTRO VETERINARIA
 app.post('/api/registro-vet', (req, res) => {
     const { nombre, apellido, correo, contrasena, telefono, direccion, id_colonia, nombre_establecimiento, descripcion, sitio_web, correo_negocio, telefono_local } = req.body;
-
-    // Primero verificar si el correo ya existe
     db.query("SELECT id_usuario FROM usuarios WHERE correo = ?", [correo], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
         if (rows.length > 0) return res.status(400).json({ error: "El correo ya está registrado" });
-
-        // Insertar usuario con rol veterinario
-        const sqlUsuario = "INSERT INTO usuarios (nombre, apellido, correo, contrasena, telefono, direccion, id_colonia, rol) VALUES (?, ?, ?, ?, ?, ?, ?, 'veterinario')";
-        db.query(sqlUsuario, [nombre, apellido, correo, contrasena, telefono, direccion, id_colonia], (err, resultUsuario) => {
-            if (err) return res.status(500).json({ error: err.message });
-
-            const id_usuario = resultUsuario.insertId;
-
-            // Insertar veterinaria vinculada al usuario
-            const sqlVet = "INSERT INTO veterinarias (id_usuario, nombre_establecimiento, descripcion, sitio_web, id_colonia, correo_negocio, telefono_local) VALUES (?, ?, ?, ?, ?, ?, ?)";
-            db.query(sqlVet, [id_usuario, nombre_establecimiento, descripcion, sitio_web, id_colonia, correo_negocio, telefono_local], (err, resultVet) => {
+        db.query("INSERT INTO usuarios (nombre, apellido, correo, contrasena, telefono, direccion, id_colonia, rol) VALUES (?, ?, ?, ?, ?, ?, ?, 'veterinario')",
+            [nombre, apellido, correo, contrasena, telefono, direccion, id_colonia], (err, resultUsuario) => {
                 if (err) return res.status(500).json({ error: err.message });
-
-                res.json({ 
-                    message: 'Veterinaria registrada exitosamente', 
-                    id_usuario,
-                    id_vet: resultVet.insertId 
-                });
+                db.query("INSERT INTO veterinarias (id_usuario, nombre_establecimiento, descripcion, sitio_web, id_colonia, correo_negocio, telefono_local) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [resultUsuario.insertId, nombre_establecimiento, descripcion, sitio_web, id_colonia, correo_negocio, telefono_local], (err, resultVet) => {
+                        if (err) return res.status(500).json({ error: err.message });
+                        res.json({ message: 'Veterinaria registrada', id_usuario: resultUsuario.insertId, id_vet: resultVet.insertId });
+                    });
             });
+    });
+});
+
+app.put('/api/veterinarias/:id_vet', (req, res) => {
+    const { nombre_establecimiento, descripcion, id_colonia, correo_negocio, telefono_local, sitio_web } = req.body;
+    db.query("UPDATE veterinarias SET nombre_establecimiento=?, descripcion=?, id_colonia=?, correo_negocio=?, telefono_local=?, sitio_web=? WHERE id_vet=?",
+        [nombre_establecimiento, descripcion, id_colonia, correo_negocio, telefono_local, sitio_web, req.params.id_vet], (err) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ message: 'Veterinaria actualizada' });
         });
-    });
 });
 
-// GET reseñas por id_vet
+// LOGO VETERINARIA con Cloudinary
+app.post('/api/veterinarias/:id_vet/logo', upload.single('logo'), async (req, res) => {
+    try {
+        const result = await cloudinary.uploader.upload(req.file.path, { folder: 'migo/logos' });
+        db.query("UPDATE veterinarias SET imagen_logo = ? WHERE id_vet = ?",
+            [result.secure_url, req.params.id_vet], (err) => {
+                if (err) return res.status(500).json({ error: err.message });
+                res.json({ imagen_logo: result.secure_url });
+            });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al subir logo' });
+    }
+});
+
+// LOGIN VETERINARIO
+app.post('/api/login-vet', (req, res) => {
+    const { correo, contrasena } = req.body;
+    db.query("SELECT u.id_usuario, u.nombre, u.rol, v.id_vet FROM usuarios u LEFT JOIN veterinarias v ON u.id_usuario = v.id_usuario WHERE u.correo = ? AND u.contrasena = ?",
+        [correo, contrasena], (err, results) => {
+            if (err || results.length === 0 || results[0].rol !== 'veterinario') return res.status(401).json({ message: 'Acceso denegado' });
+            res.json({ success: true, usuario: results[0] });
+        });
+});
+
+// COMENTARIOS
+app.get('/api/comentarios/:id_publi', (req, res) => {
+    db.query("SELECT c.*, CONCAT(u.nombre, ' ', u.apellido) AS nombre_completo FROM comentarios c JOIN usuarios u ON c.id_usuario = u.id_usuario WHERE c.id_publi = ? ORDER BY c.fecha ASC",
+        [req.params.id_publi], (err, results) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json(results);
+        });
+});
+
+app.post('/api/comentarios', (req, res) => {
+    const { id_publi, id_usuario, comentario } = req.body;
+    db.query("INSERT INTO comentarios (id_publi, id_usuario, comentario) VALUES (?, ?, ?)",
+        [id_publi, id_usuario, comentario], (err, result) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ message: 'Comentario publicado', id_comentario: result.insertId });
+        });
+});
+
+app.put('/api/comentarios/:id', (req, res) => {
+    const { comentario, id_usuario } = req.body;
+    db.query("UPDATE comentarios SET comentario = ? WHERE id_comentario = ? AND id_usuario = ?",
+        [comentario, req.params.id, id_usuario], (err, result) => {
+            if (err) return res.status(500).json({ error: err.message });
+            if (result.affectedRows === 0) return res.status(403).json({ error: "No autorizado" });
+            res.json({ message: 'Comentario actualizado' });
+        });
+});
+
+app.delete('/api/comentarios/:id/:id_usuario', (req, res) => {
+    db.query("DELETE FROM comentarios WHERE id_comentario = ? AND id_usuario = ?",
+        [req.params.id, req.params.id_usuario], (err) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ message: 'Comentario eliminado' });
+        });
+});
+
+// RESEÑAS
 app.get('/api/resenas/:id_vet', (req, res) => {
-    const sql = `SELECT r.*, CONCAT(u.nombre, ' ', u.apellido) AS nombre_usuario 
-                 FROM resenas r 
-                 JOIN usuarios u ON r.id_usuario = u.id_usuario 
-                 WHERE r.id_vet = ? 
-                 ORDER BY r.fecha_resena DESC`;
-    db.query(sql, [req.params.id_vet], (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(results);
-    });
+    db.query(`SELECT r.*, CONCAT(u.nombre, ' ', u.apellido) AS nombre_usuario FROM resenas r JOIN usuarios u ON r.id_usuario = u.id_usuario WHERE r.id_vet = ? ORDER BY r.fecha_resena DESC`,
+        [req.params.id_vet], (err, results) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json(results);
+        });
 });
 
-// POST crear reseña
 app.post('/api/resenas', (req, res) => {
     const { id_usuario, id_vet, calificacion, comentario } = req.body;
-    const sql = "INSERT INTO resenas (id_usuario, id_vet, calificacion, comentario) VALUES (?, ?, ?, ?)";
-    db.query(sql, [id_usuario, id_vet, calificacion, comentario], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: 'Reseña publicada', id_resena: result.insertId });
-    });
+    db.query("INSERT INTO resenas (id_usuario, id_vet, calificacion, comentario) VALUES (?, ?, ?, ?)",
+        [id_usuario, id_vet, calificacion, comentario], (err, result) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ message: 'Reseña publicada', id_resena: result.insertId });
+        });
 });
 
-// PUT editar reseña
 app.put('/api/resenas/:id', (req, res) => {
     const { comentario, calificacion } = req.body;
-    const sql = "UPDATE resenas SET comentario = ?, calificacion = ? WHERE id_resena = ?";
-    db.query(sql, [comentario, calificacion, req.params.id], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (result.affectedRows === 0) return res.status(404).json({ error: "Reseña no encontrada" });
-        res.json({ message: 'Reseña actualizada' });
-    });
+    db.query("UPDATE resenas SET comentario = ?, calificacion = ? WHERE id_resena = ?",
+        [comentario, calificacion, req.params.id], (err) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ message: 'Reseña actualizada' });
+        });
 });
 
-// DELETE eliminar reseña
 app.delete('/api/resenas/:id', (req, res) => {
-    db.query("DELETE FROM resenas WHERE id_resena = ?", [req.params.id], (err, result) => {
+    db.query("DELETE FROM resenas WHERE id_resena = ?", [req.params.id], (err) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json({ message: 'Reseña eliminada' });
     });
 });
 
-// COMENTARIOS Y RESEÑAS (Simplificado para brevedad)
-app.get('/api/comentarios/:id_publi', (req, res) => {
-    db.query("SELECT c.*, CONCAT(u.nombre, ' ', u.apellido) AS nombre_completo FROM comentarios c JOIN usuarios u ON c.id_usuario = u.id_usuario WHERE c.id_publi = ? ORDER BY c.fecha ASC", [req.params.id_publi], (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(results);
-    });
-});
-
-// POST: Crear comentario
-app.post('/api/comentarios', (req, res) => {
-    const { id_publi, id_usuario, comentario } = req.body;
-    const sql = "INSERT INTO comentarios (id_publi, id_usuario, comentario) VALUES (?, ?, ?)";
-    db.query(sql, [id_publi, id_usuario, comentario], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: 'Comentario publicado', id_comentario: result.insertId });
-    });
-});
-
-// PUT: Editar comentario
-app.put('/api/comentarios/:id', (req, res) => {
-    const { comentario, id_usuario } = req.body;
-    const sql = "UPDATE comentarios SET comentario = ? WHERE id_comentario = ? AND id_usuario = ?";
-    db.query(sql, [comentario, req.params.id, id_usuario], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (result.affectedRows === 0) return res.status(403).json({ error: "No autorizado o no existe" });
-        res.json({ message: 'Comentario actualizado' });
-    });
-});
-
-// DELETE: Eliminar comentario
-app.delete('/api/comentarios/:id/:id_usuario', (req, res) => {
-    const sql = "DELETE FROM comentarios WHERE id_comentario = ? AND id_usuario = ?";
-    db.query(sql, [req.params.id, req.params.id_usuario], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: 'Comentario eliminado' });
-    });
-});
-
-// ESPECIES
+// CATÁLOGOS
 app.get('/api/especies', (req, res) => {
     db.query("SELECT id_especie, nombre FROM especies ORDER BY nombre ASC", (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -276,7 +271,6 @@ app.get('/api/especies', (req, res) => {
     });
 });
 
-// TIPOS DE PUBLICACIÓN
 app.get('/api/tipos_publi', (req, res) => {
     db.query("SELECT id_tipo, nombre FROM tipos_publi ORDER BY nombre ASC", (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -284,7 +278,6 @@ app.get('/api/tipos_publi', (req, res) => {
     });
 });
 
-// ESTADOS DE PUBLICACIÓN
 app.get('/api/estados_publi', (req, res) => {
     db.query("SELECT id_estado, nombre FROM estados_publi", (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -292,7 +285,6 @@ app.get('/api/estados_publi', (req, res) => {
     });
 });
 
-// SERVICIOS
 app.get('/api/servicios', (req, res) => {
     db.query("SELECT id_servicio, nombre FROM servicios", (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -300,7 +292,6 @@ app.get('/api/servicios', (req, res) => {
     });
 });
 
-// DÍAS DE LA SEMANA
 app.get('/api/dias_semana', (req, res) => {
     db.query("SELECT id_dia, nombre FROM dias_semana", (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -308,6 +299,5 @@ app.get('/api/dias_semana', (req, res) => {
     });
 });
 
-// 4. Inicio del servidor
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, '0.0.0.0', () => console.log(`Servidor corriendo en puerto ${PORT} 🏃‍♂️`));
