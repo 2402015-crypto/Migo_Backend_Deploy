@@ -188,6 +188,29 @@ app.post('/api/registro-vet', (req, res) => {
     });
 });
 
+// GET reseñas por id_vet
+app.get('/api/resenas/:id_vet', (req, res) => {
+    const sql = `SELECT r.*, CONCAT(u.nombre, ' ', u.apellido) AS nombre_usuario 
+                 FROM resenas r 
+                 JOIN usuarios u ON r.id_usuario = u.id_usuario 
+                 WHERE r.id_vet = ? 
+                 ORDER BY r.fecha_resena DESC`;
+    db.query(sql, [req.params.id_vet], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
+// POST crear reseña
+app.post('/api/resenas', (req, res) => {
+    const { id_usuario, id_vet, calificacion, comentario } = req.body;
+    const sql = "INSERT INTO resenas (id_usuario, id_vet, calificacion, comentario) VALUES (?, ?, ?, ?)";
+    db.query(sql, [id_usuario, id_vet, calificacion, comentario], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ message: 'Reseña publicada', id_resena: result.insertId });
+    });
+});
+
 // COMENTARIOS Y RESEÑAS (Simplificado para brevedad)
 app.get('/api/comentarios/:id_publi', (req, res) => {
     db.query("SELECT c.*, CONCAT(u.nombre, ' ', u.apellido) AS nombre_completo FROM comentarios c JOIN usuarios u ON c.id_usuario = u.id_usuario WHERE c.id_publi = ? ORDER BY c.fecha ASC", [req.params.id_publi], (err, results) => {
