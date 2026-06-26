@@ -119,6 +119,18 @@ app.post('/api/login-vet', (req, res) => {
     });
 });
 
+// GET todas las veterinarias
+app.get('/api/veterinarias', (req, res) => {
+    const sql = `SELECT v.*, c.nombre AS nombre_colonia 
+                 FROM veterinarias v 
+                 LEFT JOIN colonias c ON v.id_colonia = c.id_colonia 
+                 ORDER BY v.nombre_establecimiento ASC`;
+    db.query(sql, (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
 // GET veterinaria por id_vet
 app.get('/api/veterinaria/:id_vet', (req, res) => {
     const sql = `SELECT v.*, c.nombre AS nombre_colonia 
