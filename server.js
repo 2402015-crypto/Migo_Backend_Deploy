@@ -390,20 +390,20 @@ app.get('/api/publicaciones', (req, res) => {
 });
 
 // Crear nueva publicación
-// El trigger trg_publicaciones_estado_inicial asigna id_estado = 'Pendiente' automáticamente,
-// por eso ya NO se envía id_estado desde el backend.
+// En este deploy la tabla exige id_estado, así que lo enviamos explícitamente
+// desde el frontend o usamos 1 como respaldo.
 app.post('/api/publicaciones', (req, res) => {
-    const { id_usuario, id_colonia, id_especie, id_tipo, nombre_pet, descripcion } = req.body;
+    const { id_usuario, id_colonia, id_especie, id_tipo, id_estado = 1, nombre_pet, descripcion } = req.body;
 
     if (!id_usuario || !id_colonia || !id_especie || !id_tipo || !nombre_pet || !descripcion) {
         return res.status(400).json({ error: "Faltan datos obligatorios" });
     }
 
     const sql = `
-        INSERT INTO publicaciones (id_usuario, id_colonia, id_especie, id_tipo, nombre_pet, descripcion, fecha_publi)
-        VALUES (?, ?, ?, ?, ?, ?, NOW())
+        INSERT INTO publicaciones (id_usuario, id_colonia, id_especie, id_tipo, id_estado, nombre_pet, descripcion, fecha_publi)
+        VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
     `;
-    db.query(sql, [id_usuario, id_colonia, id_especie, id_tipo, nombre_pet, descripcion], (err, result) => {
+    db.query(sql, [id_usuario, id_colonia, id_especie, id_tipo, id_estado, nombre_pet, descripcion], (err, result) => {
         if (err) {
             console.error("Error al crear publicación:", err);
             return res.status(500).json({ error: err.message });
