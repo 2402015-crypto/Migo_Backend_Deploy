@@ -103,6 +103,11 @@ const MAIL_PROVIDER = (process.env.MAIL_PROVIDER || 'brevo').toLowerCase();
 const BREVO_API_KEY = process.env.BREVO_API_KEY || process.env.BREVO_KEY;
 const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL || process.env.MAIL_FROM;
 const BREVO_SENDER_NAME = process.env.BREVO_SENDER_NAME || 'MIGO';
+const TEST_RECIPIENT_EMAIL = process.env.TEST_RECIPIENT_EMAIL || '';
+
+function esEntornoLocal() {
+    return process.env.NODE_ENV !== 'production' || process.env.LOCAL_DEV === 'true' || process.env.MAIL_PROVIDER === 'console';
+}
 
 function normalizarSenderBrevo(valor, nombreFallback) {
     if (!valor) {
@@ -185,13 +190,35 @@ function construirTextoVerificacion(nombre, link) {
 }
 
 async function enviarCorreoConBrevo({ correoDestino, asunto, htmlContent, textContent }) {
+    const destinatarioFinal = TEST_RECIPIENT_EMAIL || correoDestino;
+
     if (!BREVO_API_KEY) {
+        if (esEntornoLocal()) {
+            console.warn('[MAIL][LOCAL] No hay BREVO_API_KEY configurada. Se simula el envío de correo para pruebas locales.');
+            return {
+                mocked: true,
+                message: 'Correo simulado en local',
+                to: destinatarioFinal,
+                subject: asunto
+            };
+        }
+
         const error = new Error('Falta BREVO_API_KEY en Railway.');
         error.code = 'CREDENTIALS_MISSING';
         throw error;
     }
 
     if (!BREVO_SENDER.email) {
+        if (esEntornoLocal()) {
+            console.warn('[MAIL][LOCAL] No hay BREVO_SENDER_EMAIL o MAIL_FROM configurado. Se simula el envío de correo para pruebas locales.');
+            return {
+                mocked: true,
+                message: 'Correo simulado en local',
+                to: destinatarioFinal,
+                subject: asunto
+            };
+        }
+
         const error = new Error('Falta BREVO_SENDER_EMAIL o MAIL_FROM en Railway.');
         error.code = 'CREDENTIALS_MISSING';
         throw error;
@@ -208,7 +235,7 @@ async function enviarCorreoConBrevo({ correoDestino, asunto, htmlContent, textCo
                 name: BREVO_SENDER.name,
                 email: BREVO_SENDER.email
             },
-            to: [{ email: correoDestino }],
+            to: [{ email: destinatarioFinal }],
             subject: asunto,
             htmlContent,
             textContent
@@ -293,6 +320,11 @@ async function enviarAvisoAdministrativo(correoDestino, nombre, motivo, esElimin
 
 async function enviarCorreoVerificacion(correoDestino, nombre, token) {
     const link = `${BACKEND_URL}/api/verificar-cuenta?token=${token}`;
+    if (esEntornoLocal()) {
+        console.log('[MAIL][LOCAL] Link de verificación:', link);
+        console.log('[MAIL][LOCAL] Destinatario:', TEST_RECIPIENT_EMAIL || correoDestino);
+    }
+
     if (MAIL_PROVIDER === 'brevo') {
         try {
             return await enviarCorreoVerificacionConBrevo(correoDestino, nombre, link);
@@ -618,13 +650,9 @@ app.delete('/api/publicaciones/:id_publi', (req, res) => {
             return res.status(403).json({ message: "No tienes permiso para eliminar esta publicación" });
         }
 
-        db.query("DELETE FROM fotos_publi WHERE id_publi = ?", [id_publi], () => {
-            db.query("DELETE FROM comentarios WHERE id_publi = ?", [id_publi], () => {
-                db.query("DELETE FROM publicaciones WHERE id_publi = ?", [id_publi], (err) => {
-                    if (err) return res.status(500).json({ error: err.message });
-                    res.json({ message: "Publicación eliminada correctamente" });
-                });
-            });
+        db.query('CALL sp_eliminar_publicacion_completa(?)', [id_publi], (err) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ message: "Publicación eliminada correctamente" });
         });
     });
 });
@@ -773,6 +801,7 @@ app.get('/api/veterinarias', (req, res) => {
             v.documento_verificacion_rechazo,
             v.documento_verificacion_subido_en,
             v.documento_verificacion_resuelto_en,
+            fn_dias_pendiente_verificacion(v.id_vet) AS dias_pendiente,
             c.nombre AS nombre_colonia
         FROM veterinarias v
         LEFT JOIN colonias c ON v.id_colonia = c.id_colonia
@@ -805,6 +834,7 @@ app.get('/api/veterinarias/detallado', (req, res) => {
             v.documento_verificacion_rechazo,
             v.documento_verificacion_subido_en,
             v.documento_verificacion_resuelto_en,
+            fn_calificacion_promedio_vet(v.id_vet) AS calificacion_promedio,
             c.nombre AS nombre_colonia
         FROM veterinarias v
         LEFT JOIN colonias c ON v.id_colonia = c.id_colonia
@@ -1034,32 +1064,24 @@ app.get('/api/veterinarias/:id/verificacion/documento', (req, res) => {
 
 // Actualizar estado de verificación de veterinaria
 app.put('/api/veterinarias/:id/verificacion', (req, res) => {
-    const { estado_verificacion, motivo_rechazo } = req.body;
-    const estadosValidos = ['pendiente', 'aprobada', 'rechazada', 'sin_solicitud'];
+  const { estado_verificacion, motivo_rechazo, id_admin } = req.body;
 
-    if (!estadosValidos.includes(estado_verificacion)) {
-        return res.status(400).json({ message: 'Estado de verificación inválido' });
+  db.query(
+    'CALL sp_actualizar_estado_verificacion(?, ?, ?, ?)',
+    [req.params.id, estado_verificacion, motivo_rechazo || null, id_admin],
+    (err) => {
+      if (err) {
+        if (err.sqlState === '45000') return res.status(400).json({ message: err.message });
+        return res.status(500).json({ error: err.message });
+      }
+      
+      res.json({
+        message: 'Estado de verificación actualizado correctamente',
+        estado_verificacion,
+        documento_verificacion_rechazo: motivo_rechazo || null
+      });
     }
-
-    const mensajeRechazo = estado_verificacion === 'rechazada' ? (motivo_rechazo || 'Tu solicitud fue rechazada. Sube de nuevo tu cédula o contacta a los administradores.') : null;
-    const sql = `
-        UPDATE veterinarias
-        SET estado_verificacion = ?,
-            documento_verificacion_rechazo = ?,
-            documento_verificacion_resuelto_en = NOW()
-        WHERE id_vet = ?
-    `;
-
-    db.query(sql, [estado_verificacion, mensajeRechazo, req.params.id], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (result.affectedRows === 0) return res.status(404).json({ message: 'Veterinaria no encontrada' });
-
-        res.json({
-            message: 'Estado de verificación actualizado correctamente',
-            estado_verificacion,
-            documento_verificacion_rechazo: mensajeRechazo
-        });
-    });
+  );
 });
 
 // Obtener horarios de una veterinaria
@@ -1372,24 +1394,19 @@ app.delete('/api/admin/publicaciones/:id_publi', (req, res) => {
         db.query("SELECT u.correo, u.nombre FROM usuarios u JOIN publicaciones p ON u.id_usuario = p.id_usuario WHERE p.id_publi = ?", [id_publi], (err, results) => {
             const usuario = results && results[0];
 
-            db.query("DELETE FROM fotos_publi WHERE id_publi = ?", [id_publi], () => {
-                db.query("DELETE FROM comentarios WHERE id_publi = ?", [id_publi], () => {
-                    db.query("DELETE FROM publicaciones WHERE id_publi = ?", [id_publi], (err, result) => {
-                        if (err) return res.status(500).json({ error: err.message });
-                        if (result.affectedRows === 0) return res.status(404).json({ message: "No encontrada" });
+            db.query('CALL sp_eliminar_publicacion_completa(?)', [id_publi], (err) => {
+                if (err) return res.status(500).json({ error: err.message });
 
-                        if (usuario) {
-                            enviarAvisoAdministrativo(usuario.correo, usuario.nombre, 'Incumplimiento de normas', true).catch(error => {
-                                console.error('[MAIL] No se pudo enviar aviso administrativo:', {
-                                    code: error?.code || 'N/A',
-                                    message: error?.message || String(error),
-                                    details: error?.details || null
-                                });
-                            });
-                        }
-                        res.json({ message: "Publicación eliminada y usuario notificado" });
+                if (usuario) {
+                    enviarAvisoAdministrativo(usuario.correo, usuario.nombre, 'Incumplimiento de normas', true).catch(error => {
+                        console.error('[MAIL] No se pudo enviar aviso administrativo:', {
+                            code: error?.code || 'N/A',
+                            message: error?.message || String(error),
+                            details: error?.details || null
+                        });
                     });
-                });
+                }
+                res.json({ message: "Publicación eliminada y usuario notificado" });
             });
         });
     });
@@ -1445,66 +1462,17 @@ app.get('/api/usuarios', (req, res) => {
     });
 });
 
-app.delete('/api/usuarios/:id', async (req, res) => {
+app.delete('/api/usuarios/:id', (req, res) => {
     const id = req.params.id;
 
-    const executeQuery = (sql, params) => {
-        return new Promise((resolve, reject) => {
-            db.query(sql, params, (err, result) => {
-                if (err) return reject(err);
-                resolve(result);
-            });
-        });
-    };
-
-    try {
-        // 1) Fotos de las publicaciones del usuario
-        await executeQuery(
-            "DELETE FROM fotos_publi WHERE id_publi IN (SELECT id_publi FROM publicaciones WHERE id_usuario = ?)",
-            [id]
-        );
-
-        // 2) Comentarios hechos POR el usuario, y comentarios EN sus publicaciones
-        await executeQuery("DELETE FROM comentarios WHERE id_usuario = ?", [id]);
-        await executeQuery(
-            "DELETE FROM comentarios WHERE id_publi IN (SELECT id_publi FROM publicaciones WHERE id_usuario = ?)",
-            [id]
-        );
-
-        // 3) Reseñas hechas por el usuario
-        await executeQuery("DELETE FROM resenas WHERE id_usuario = ?", [id]);
-
-        // 4) Publicaciones del usuario
-        await executeQuery("DELETE FROM publicaciones WHERE id_usuario = ?", [id]);
-
-        // 5) Si el usuario es veterinario: reseñas a su vet, horarios, servicios y la veterinaria
-        await executeQuery(
-            "DELETE FROM resenas WHERE id_vet IN (SELECT id_vet FROM veterinarias WHERE id_usuario = ?)",
-            [id]
-        );
-        await executeQuery(
-            "DELETE FROM horarios_vet WHERE id_vet IN (SELECT id_vet FROM veterinarias WHERE id_usuario = ?)",
-            [id]
-        );
-        await executeQuery(
-            "DELETE FROM vet_servicios WHERE id_vet IN (SELECT id_vet FROM veterinarias WHERE id_usuario = ?)",
-            [id]
-        );
-        await executeQuery("DELETE FROM veterinarias WHERE id_usuario = ?", [id]);
-
-        // 6) Finalmente, el usuario
-        const result = await executeQuery("DELETE FROM usuarios WHERE id_usuario = ?", [id]);
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ message: "Usuario no encontrado" });
+    db.query('CALL sp_eliminar_usuario_completo(?)', [id], (err) => {
+        if (err) {
+            if (err.sqlState === '45000') return res.status(404).json({ message: err.sqlMessage });
+            return res.status(500).json({ error: err.message });
         }
-
         res.json({ message: "Usuario eliminado correctamente" });
-    } catch (err) {
-        console.error("Error al eliminar usuario:", err);
-        res.status(500).json({ message: "Error: " + err.message });
-    }
+    });
 });
-
 
 // ═══════════════════════════════════════
 //  SERVIDOR
