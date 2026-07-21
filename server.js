@@ -1363,24 +1363,24 @@ app.delete('/api/admin/publicaciones/:id_publi', (req, res) => {
         db.query("SELECT u.correo, u.nombre FROM usuarios u JOIN publicaciones p ON u.id_usuario = p.id_usuario WHERE p.id_publi = ?", [id_publi], (err, results) => {
             const usuario = results && results[0];
 
-            db.query("DELETE FROM fotos_publi WHERE id_publi = ?", [id_publi], () => {
-                db.query("DELETE FROM comentarios WHERE id_publi = ?", [id_publi], () => {
-                    db.query("DELETE FROM publicaciones WHERE id_publi = ?", [id_publi], (err, result) => {
-                        if (err) return res.status(500).json({ error: err.message });
-                        if (result.affectedRows === 0) return res.status(404).json({ message: "No encontrada" });
+            db.query("CALL sp_eliminar_publicacion_completa(?)", [id_publi], (err) => {
+                if (err) {
+                    if (err.sqlMessage && err.sqlMessage.includes('Publicación no encontrada')) {
+                        return res.status(404).json({ message: "No encontrada" });
+                    }
+                    return res.status(500).json({ error: err.message });
+                }
 
-                        if (usuario) {
-                            enviarAvisoAdministrativo(usuario.correo, usuario.nombre, 'Incumplimiento de normas', true).catch(error => {
-                                console.error('[MAIL] No se pudo enviar aviso administrativo:', {
-                                    code: error?.code || 'N/A',
-                                    message: error?.message || String(error),
-                                    details: error?.details || null
-                                });
-                            });
-                        }
-                        res.json({ message: "Publicación eliminada y usuario notificado" });
+                if (usuario) {
+                    enviarAvisoAdministrativo(usuario.correo, usuario.nombre, 'Incumplimiento de normas', true).catch(error => {
+                        console.error('[MAIL] No se pudo enviar aviso administrativo:', {
+                            code: error?.code || 'N/A',
+                            message: error?.message || String(error),
+                            details: error?.details || null
+                        });
                     });
-                });
+                }
+                res.json({ message: "Publicación eliminada y usuario notificado" });
             });
         });
     });
